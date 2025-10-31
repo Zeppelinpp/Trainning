@@ -1,0 +1,47 @@
+# Reward Model Training Configuration
+model:
+  base_model: "Qwen/Qwen2.5-7B"  # 可替换为其他基座模型
+  max_length: 4096
+  num_labels: 1  # 输出单个总分或3个分数
+
+training:
+  num_epochs: 3
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  learning_rate: 1e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  eval_steps: 100
+  save_steps: 500
+  logging_steps: 10
+  
+distributed:
+  backend: "nccl"  # 使用NCCL用于GPU训练
+  find_unused_parameters: false
+  
+data:
+  train_file: "data/train.jsonl"
+  val_file: "data/val.jsonl"
+  test_file: "data/test.jsonl"
+  
+reward_dimensions:
+  - accuracy  # 准确度
+  - professionalism  # 专业度
+  - depth_of_analysis  # 分析深度
+  weight_strategy: "average"  # average, weighted, or multi_head
+  dimension_weights:
+    accuracy: 0.4
+    professionalism: 0.3
+    depth_of_analysis: 0.3
+
+output:
+  output_dir: "./output"
+  logging_dir: "./logs"
+  save_total_limit: 3
+  
+wandb:
+  enabled: true
+  project: "financial-reward-model"
+  run_name: "reward-model-train"
+
