@@ -52,4 +52,4 @@ Thumbs.db
 # Evaluation results
 evaluation_results.json
 *_scored.json
-
+.env
