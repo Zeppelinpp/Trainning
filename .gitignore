@@ -53,3 +53,6 @@ Thumbs.db
 evaluation_results.json
 *_scored.json
 .env
+
+reward_model/data/analysis_framework/
+reward_model/data/system_prompt/
