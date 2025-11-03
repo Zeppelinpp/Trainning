@@ -413,6 +413,37 @@ def load_system_prompts(system_prompt_dir: str) -> List[str]:
     return system_prompts
 
 
+def load_sample_data(data_sample_dir: str) -> Dict[str, str]:
+    """加载样例数据文件"""
+    data_files = {
+        "profit_analysis_data": "profit_analysis_data.md",
+        "dimension_analysis_data": "dimension_analysis_data.md",
+        "industry_indicators": "industry_indicators.md",
+        "budget_data": "budget_data.md",
+    }
+    
+    loaded_data = {}
+    for key, filename in data_files.items():
+        file_path = os.path.join(data_sample_dir, filename)
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                loaded_data[key] = f.read()
+        else:
+            print(f"警告: 数据文件 {file_path} 不存在，将使用空字符串")
+            loaded_data[key] = ""
+    
+    return loaded_data
+
+
+def replace_data_template(template: str, data_dict: Dict[str, str]) -> str:
+    """替换数据模板中的占位符"""
+    result = template
+    for key, value in data_dict.items():
+        placeholder = f"{{{{{key}}}}}"
+        result = result.replace(placeholder, value)
+    return result
+
+
 def generate_comparison_dataset(
     fields: List[str],
     model_configs: List[ModelConfig],
@@ -421,6 +452,7 @@ def generate_comparison_dataset(
     sample_data: str,
     n_pairs_per_field: int,
     output_dir: str,
+    data_sample_dir: str = None,
     use_parallel: bool = True,
     max_workers: int = None,
 ):
@@ -432,9 +464,10 @@ def generate_comparison_dataset(
         model_configs: 模型配置列表
         framework_dir: 分析框架目录
         system_prompt_dir: 系统提示词目录
-        sample_data: 样例数据描述（或实际数据）
+        sample_data: 样例数据描述（或实际数据，支持模板变量）
         n_pairs_per_field: 每个行业生成的对比对数量
         output_dir: 输出目录
+        data_sample_dir: 样例数据目录（用于加载实际数据文件）
         use_parallel: 是否使用并发（默认True）
         max_workers: 最大并发数（默认为CPU核心数）
     """
@@ -449,6 +482,14 @@ def generate_comparison_dataset(
 
     print(f"已加载 {len(frameworks)} 个分析框架")
     print(f"已加载 {len(system_prompts)} 个系统提示词")
+    
+    # 加载样例数据文件（如果提供了数据目录）
+    if data_sample_dir and os.path.exists(data_sample_dir):
+        print(f"加载样例数据文件从 {data_sample_dir}...")
+        data_dict = load_sample_data(data_sample_dir)
+        # 替换模板变量
+        sample_data = replace_data_template(sample_data, data_dict)
+        print("样例数据文件加载完成")
 
     total_pairs = len(fields) * n_pairs_per_field
 
@@ -713,6 +754,7 @@ if __name__ == "__main__":
     framework_dir = "./reward_model/data/analysis_framework/"
     system_prompt_dir = "./reward_model/data/system_prompt/"
     output_dir = "./reward_model/data/dataset/"
+    data_sample_dir = "./reward_model/data/data_sample/"
 
     model_configs = [
         ModelConfig(
@@ -750,6 +792,7 @@ if __name__ == "__main__":
         sample_data=SAMPLE_DATA,
         n_pairs_per_field=10,  # 每个行业生成10个对比对
         output_dir=output_dir,
+        data_sample_dir=data_sample_dir,  # 传入数据样例目录
         use_parallel=True,  # 启用并发
         max_workers=None,  # 自动选择worker数量
     )
