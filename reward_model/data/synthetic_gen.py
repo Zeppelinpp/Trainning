@@ -6,6 +6,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from tqdm import tqdm
 from pydantic import BaseModel
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 load_dotenv()
 
@@ -19,6 +21,65 @@ class ModelConfig(BaseModel):
 qwen_client = OpenAI(api_key=os.getenv("QWEN_KEY"), base_url=os.getenv("QWEN_URL"))
 
 
+def _gen_single_framework(args):
+    """单个框架生成任务（用于并发）"""
+    (
+        analysis_framework,
+        model_config,
+        field,
+        perspective,
+        industry_emphasis,
+        selected_variations,
+        idx,
+    ) = args
+    
+    client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
+    model = model_config["model"]
+    
+    prompt = f"""
+你需要创建一个新的财务分析框架，用于指导{field}企业的财务分析报告生成。
+
+# 分析视角
+采用**{perspective["angle"]}**的视角：{perspective["focus"]}
+
+# 行业适配要求
+{industry_emphasis}
+
+# 创新要求
+基于提供的参考框架，进行以下创新：
+{chr(10).join([f"- {var}" for var in selected_variations])}
+
+# 参考框架（仅供参考，不要照搬）
+{analysis_framework}
+
+# 输出要求
+1. 保持markdown格式，使用清晰的标题层级（一、二、三...）
+2. 确保框架的完整性和逻辑性
+3. 每个章节要有明确的分析目标和关注重点
+4. 体现所选分析视角的特点
+5. 融入{field}的行业特色
+6. 与已有框架有明显差异，避免重复
+
+仅输出新的分析框架，不要任何其他说明文字。
+"""
+    
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": prompt}],
+        temperature=random.uniform(0.7, 1.3),
+        seed=random.randint(1, 1000000),
+    )
+    
+    file_name = f"{model}_{field}_framework_{idx + 1}.md"
+    content = response.choices[0].message.content
+    file_path = f"./reward_model/data/analysis_framework/{file_name}"
+    
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    
+    return file_name
+
+
 def gen_framework(
     analysis_framework: str,
     client: OpenAI,
@@ -26,6 +87,8 @@ def gen_framework(
     n_samples: int = 10,
     field: str = "",
     pbar: tqdm = None,
+    use_parallel: bool = True,
+    max_workers: int = None,
 ):
     # Define diverse framework perspectives for variation
     framework_perspectives = [
@@ -55,11 +118,12 @@ def gen_framework(
         },
     ]
 
+    # 准备所有任务参数
+    tasks = []
+    model_config = {"model": model, "api_key": client.api_key, "base_url": client.base_url}
+    
     for i in range(n_samples):
-        # Randomly select a perspective
         perspective = random.choice(framework_perspectives)
-
-        # Randomly decide whether to emphasize industry-specific aspects
         industry_emphasis = random.choice(
             [
                 f"深度结合{field}的行业特征，如行业周期、竞争格局、监管政策、技术变革等因素",
@@ -68,8 +132,6 @@ def gen_framework(
                 f"针对{field}的业务模式特点设计专属的分析逻辑",
             ]
         )
-
-        # Add variation elements
         variation_elements = [
             "调整章节的优先级和详略程度",
             "增加一些原框架没有的独特分析维度",
@@ -77,53 +139,125 @@ def gen_framework(
             "在保持整体结构的基础上创新子章节的分析方法",
         ]
         selected_variations = random.sample(variation_elements, k=random.randint(2, 3))
+        
+        tasks.append((
+            analysis_framework,
+            model_config,
+            field,
+            perspective,
+            industry_emphasis,
+            selected_variations,
+            i,
+        ))
+    
+    # 并发执行
+    if use_parallel and n_samples > 1:
+        workers = max_workers or min(cpu_count(), n_samples)
+        with Pool(processes=workers) as pool:
+            for _ in pool.imap_unordered(_gen_single_framework, tasks):
+                if pbar:
+                    pbar.update(1)
+    else:
+        # 串行执行（用于调试）
+        for task in tasks:
+            _gen_single_framework(task)
+            if pbar:
+                pbar.update(1)
+
+
+def _gen_single_sys_prompt(args):
+    """单个系统提示词生成任务（用于并发）"""
+    (
+        field,
+        sample_system_prompt,
+        model_config,
+        is_positive,
+        selected_aspects_or_styles,
+        idx,
+    ) = args
+    
+    client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
+    model = model_config["model"]
+    
+    if is_positive:
+        requirements_text = "\n".join(
+            [
+                f"**{aspect['focus']}**：\n"
+                + "\n".join([f"- {req}" for req in aspect["requirements"]])
+                for aspect in selected_aspects_or_styles
+            ]
+        )
 
         prompt = f"""
-你需要创建一个新的财务分析框架，用于指导{field}企业的财务分析报告生成。
+你需要创建一个系统提示词，用于指导AI生成高质量的{field}财务分析报告。
 
-# 分析视角
-采用**{perspective["angle"]}**的视角：{perspective["focus"]}
+# 核心目标
+生成的提示词要确保AI输出的报告具有以下特征：
+1. **数值计算完全准确**：所有财务指标、比率、增长率的计算都严格遵循会计准则
+2. **分析深度充分**：不止于现象描述，要深入业务层面进行归因分析
+3. **行业专业性强**：充分体现{field}的行业特征和专业知识
 
-# 行业适配要求
-{industry_emphasis}
+# 必须包含的质量要求
+{requirements_text}
 
-# 创新要求
-基于提供的参考框架，进行以下创新：
-{chr(10).join([f"- {var}" for var in selected_variations])}
+# 写作要求
+- 提示词要具体明确，给出可执行的指令
+- 要体现对质量的高标准要求
+- 针对{field}行业的特点给出针对性的分析要求
+- 强调数据准确性和分析深度的重要性
+- 可以参考但不要照搬下面的样例结构
 
-# 参考框架（仅供参考，不要照搬）
-{analysis_framework}
+# 样例参考（仅供参考结构，内容需要创新）
+{sample_system_prompt[:500]}...
 
-# 输出要求
-1. 保持markdown格式，使用清晰的标题层级（一、二、三...）
-2. 确保框架的完整性和逻辑性
-3. 每个章节要有明确的分析目标和关注重点
-4. 体现所选分析视角的特点
-5. 融入{field}的行业特色
-6. 与已有框架有明显差异，避免重复
+请生成一个全新的系统提示词，确保与已有提示词有明显差异。仅输出系统提示词内容，不要任何其他说明。
+"""
+    else:
+        characteristics_text = "\n".join(
+            [
+                f"**{style['style']}**：\n"
+                + "\n".join([f"- {char}" for char in style["characteristics"]])
+                for style in selected_aspects_or_styles
+            ]
+        )
 
-仅输出新的分析框架，不要任何其他说明文字。
+        prompt = f"""
+你需要创建一个系统提示词，用于指导AI生成{field}财务分析报告。这个提示词应该是"宽松标准"的，不需要过于严格的质量要求。
+
+# 核心目标
+生成的提示词应该让AI输出相对简化的报告：
+1. 分析不需要过于深入，点到为止即可
+2. 数值计算使用常规方法，不需要处理所有特殊情况
+3. 使用通用的分析框架，不需要过度定制
+
+# 建议的简化方向
+{characteristics_text}
+
+# 写作要求
+- 提示词不要过于复杂，保持简洁实用
+- 不要过分强调数据准确性的细节
+- 分析要求可以相对宽松和灵活
+- 不需要强制要求深度归因分析
+- 可以允许使用通用模板和标准化表述
+
+请生成一个系统提示词，体现"够用即可"的实用主义风格。仅输出系统提示词内容，不要任何其他说明。
 """
 
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": prompt},
-            ],
-            temperature=random.uniform(0.7, 1.3),
-            seed=random.randint(1, 1000000),
-        )
-        file_name = f"{model}_{field}_framework_{i + 1}.md"
-        content = response.choices[0].message.content
-        with open(
-            f"./reward_model/data/analysis_framework/{file_name}",
-            "w",
-            encoding="utf-8",
-        ) as f:
-            f.write(content)
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": prompt}],
+        temperature=random.uniform(0.7, 1.3),
+        seed=random.randint(1, 1000000),
+    )
 
-        if pbar:
-            pbar.update(1)
+    file_name = f"{'positive' if is_positive else 'negative'}_{model}_{field}_sys_prompt_{idx + 1}.md"
+    content = response.choices[0].message.content
+    file_path = f"./reward_model/data/system_prompt/{file_name}"
+    
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    return file_name
 
 
 def gen_sys_prompt(
@@ -133,6 +267,8 @@ def gen_sys_prompt(
     client: OpenAI,
     model: str,
     pbar: tqdm = None,
+    use_parallel: bool = True,
+    max_workers: int = None,
 ):
     # Define diverse quality dimensions for variation
     positive_aspects = [
@@ -238,97 +374,42 @@ def gen_sys_prompt(
         },
     ]
 
+    # 准备所有任务参数
+    tasks = []
+    model_config = {"model": model, "api_key": client.api_key, "base_url": client.base_url}
+    
     for i in range(n_samples):
         is_positive = random.choice([True, False])
 
         if is_positive:
-            # Randomly select different quality aspects for diversity
             selected_aspects = random.sample(positive_aspects, k=random.randint(2, 3))
-
-            requirements_text = "\n".join(
-                [
-                    f"**{aspect['focus']}**：\n"
-                    + "\n".join([f"- {req}" for req in aspect["requirements"]])
-                    for aspect in selected_aspects
-                ]
-            )
-
-            prompt = f"""
-你需要创建一个系统提示词，用于指导AI生成高质量的{field}财务分析报告。
-
-# 核心目标
-生成的提示词要确保AI输出的报告具有以下特征：
-1. **数值计算完全准确**：所有财务指标、比率、增长率的计算都严格遵循会计准则
-2. **分析深度充分**：不止于现象描述，要深入业务层面进行归因分析
-3. **行业专业性强**：充分体现{field}的行业特征和专业知识
-
-# 必须包含的质量要求
-{requirements_text}
-
-# 写作要求
-- 提示词要具体明确，给出可执行的指令
-- 要体现对质量的高标准要求
-- 针对{field}行业的特点给出针对性的分析要求
-- 强调数据准确性和分析深度的重要性
-- 可以参考但不要照搬下面的样例结构
-
-# 样例参考（仅供参考结构，内容需要创新）
-{sample_system_prompt[:500]}...
-
-请生成一个全新的系统提示词，确保与已有提示词有明显差异。仅输出系统提示词内容，不要任何其他说明。
-"""
+            selected_items = selected_aspects
         else:
-            # Randomly select different problematic styles for diversity
             selected_styles = random.sample(negative_aspects, k=random.randint(2, 3))
-
-            characteristics_text = "\n".join(
-                [
-                    f"**{style['style']}**：\n"
-                    + "\n".join([f"- {char}" for char in style["characteristics"]])
-                    for style in selected_styles
-                ]
-            )
-
-            prompt = f"""
-你需要创建一个系统提示词，用于指导AI生成{field}财务分析报告。这个提示词应该是"宽松标准"的，不需要过于严格的质量要求。
-
-# 核心目标
-生成的提示词应该让AI输出相对简化的报告：
-1. 分析不需要过于深入，点到为止即可
-2. 数值计算使用常规方法，不需要处理所有特殊情况
-3. 使用通用的分析框架，不需要过度定制
-
-# 建议的简化方向
-{characteristics_text}
-
-# 写作要求
-- 提示词不要过于复杂，保持简洁实用
-- 不要过分强调数据准确性的细节
-- 分析要求可以相对宽松和灵活
-- 不需要强制要求深度归因分析
-- 可以允许使用通用模板和标准化表述
-
-请生成一个系统提示词，体现"够用即可"的实用主义风格。仅输出系统提示词内容，不要任何其他说明。
-"""
-
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": prompt},
-            ],
-            temperature=random.uniform(0.7, 1.3),
-            seed=random.randint(1, 1000000),
-        )
-
-        file_name = f"{'positive' if is_positive else 'negative'}_{model}_{field}_sys_prompt_{i + 1}.md"
-        content = response.choices[0].message.content
-        with open(
-            f"./reward_model/data/system_prompt/{file_name}", "w", encoding="utf-8"
-        ) as f:
-            f.write(content)
-
-        if pbar:
-            pbar.update(1)
+            selected_items = selected_styles
+        
+        tasks.append((
+            field,
+            sample_system_prompt,
+            model_config,
+            is_positive,
+            selected_items,
+            i,
+        ))
+    
+    # 并发执行
+    if use_parallel and n_samples > 1:
+        workers = max_workers or min(cpu_count(), n_samples)
+        with Pool(processes=workers) as pool:
+            for _ in pool.imap_unordered(_gen_single_sys_prompt, tasks):
+                if pbar:
+                    pbar.update(1)
+    else:
+        # 串行执行（用于调试）
+        for task in tasks:
+            _gen_single_sys_prompt(task)
+            if pbar:
+                pbar.update(1)
 
 
 def prompt_pipeline(
@@ -402,8 +483,8 @@ if __name__ == "__main__":
                 api_key=os.getenv("QWEN_KEY"),
             ),
         ],
-        sample_system_prompt_path="./reward_model/data/system_prompt.md",
-        sample_analysis_framework_path="./reward_model/data/analysis_framework.md",
-        samples_per_field=20,
-        samples_per_model=5,
+        sample_system_prompt_path="./reward_model/data/system_prompt/system_prompt.md",
+        sample_analysis_framework_path="./reward_model/data/analysis_framework/analysis_framework.md",
+        samples_per_field=10,
+        samples_per_model=2,
     )

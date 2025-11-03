@@ -6,6 +6,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from tqdm import tqdm
 from pydantic import BaseModel
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
 load_dotenv()
 
@@ -275,6 +277,56 @@ def generate_defect_response(
     return response.choices[0].message.content, metadata
 
 
+def _generate_single_pair(args):
+    """单个对比对生成任务（用于并发）"""
+    (
+        model_config,
+        field,
+        system_prompt,
+        analysis_framework,
+        sample_data,
+    ) = args
+    
+    client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
+    model = model_config["model"]
+    
+    try:
+        # Generate gold standard
+        complete_prompt, gold_response, gold_metadata = generate_gold_response(
+            client=client,
+            model=model,
+            field=field,
+            system_prompt=system_prompt,
+            analysis_framework=analysis_framework,
+            sample_data=sample_data,
+        )
+
+        # Generate defect through controlled degradation
+        defect_response, defect_metadata = generate_defect_response(
+            client, model, gold_response, field
+        )
+
+        # Create comparison pair
+        pair = ComparisonPair(
+            prompt=complete_prompt,
+            chosen=gold_response,
+            rejected=defect_response,
+            metadata={
+                "field": field,
+                "model": model,
+                "gold_metadata": gold_metadata,
+                "defect_metadata": defect_metadata,
+            },
+        )
+
+        return pair.model_dump()
+    except Exception as e:
+        print(f"\n生成对比对时出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
 def generate_comparison_pair(
     client: OpenAI,
     model: str,
@@ -367,6 +419,8 @@ def generate_comparison_dataset(
     sample_data: str,
     n_pairs_per_field: int,
     output_dir: str,
+    use_parallel: bool = True,
+    max_workers: int = None,
 ):
     """
     生成对比对数据集
@@ -379,6 +433,8 @@ def generate_comparison_dataset(
         sample_data: 样例数据描述（或实际数据）
         n_pairs_per_field: 每个行业生成的对比对数量
         output_dir: 输出目录
+        use_parallel: 是否使用并发（默认True）
+        max_workers: 最大并发数（默认为CPU核心数）
     """
     # 确保输出目录存在
     os.makedirs(output_dir, exist_ok=True)
@@ -393,40 +449,51 @@ def generate_comparison_dataset(
     print(f"已加载 {len(system_prompts)} 个系统提示词")
 
     total_pairs = len(fields) * n_pairs_per_field
+    
+    # 准备所有任务参数
+    tasks = []
+    for field in fields:
+        for i in range(n_pairs_per_field):
+            # Randomly select framework, system_prompt and model
+            framework = random.choice(frameworks)
+            system_prompt = random.choice(system_prompts)
+            model_config = random.choice(model_configs)
+            
+            model_config_dict = {
+                "model": model_config.model,
+                "api_key": model_config.api_key,
+                "base_url": model_config.base_url,
+            }
+            
+            tasks.append((
+                model_config_dict,
+                field,
+                system_prompt,
+                framework,
+                sample_data,
+            ))
+    
     comparison_pairs = []
-
-    with tqdm(total=total_pairs, desc="生成对比对") as pbar:
-        for field in fields:
-            for i in range(n_pairs_per_field):
-                # Randomly select framework, system_prompt and model
-                framework = random.choice(frameworks)
-                system_prompt = random.choice(system_prompts)
-                model_config = random.choice(model_configs)
-
-                # Create OpenAI client
-                client = OpenAI(
-                    api_key=model_config.api_key, base_url=model_config.base_url
-                )
-
-                try:
-                    # Generate comparison pair
-                    pair = generate_comparison_pair(
-                        client=client,
-                        model=model_config.model,
-                        field=field,
-                        system_prompt=system_prompt,
-                        analysis_framework=framework,
-                        sample_data=sample_data,
-                    )
-
-                    comparison_pairs.append(pair.model_dump())
-
-                except Exception as e:
-                    print(f"\n生成对比对时出错: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    continue
-
+    
+    # 并发执行
+    if use_parallel and total_pairs > 1:
+        workers = max_workers or min(cpu_count(), total_pairs)
+        print(f"使用 {workers} 个并发进程生成对比对...")
+        
+        with Pool(processes=workers) as pool:
+            with tqdm(total=total_pairs, desc="生成对比对") as pbar:
+                for result in pool.imap_unordered(_generate_single_pair, tasks):
+                    if result is not None:
+                        comparison_pairs.append(result)
+                    pbar.update(1)
+    else:
+        # 串行执行（用于调试）
+        print("串行模式生成对比对...")
+        with tqdm(total=total_pairs, desc="生成对比对") as pbar:
+            for task in tasks:
+                result = _generate_single_pair(task)
+                if result is not None:
+                    comparison_pairs.append(result)
                 pbar.update(1)
 
     # Save to JSONL
@@ -438,39 +505,15 @@ def generate_comparison_dataset(
     return output_file
 
 
-def add_multidim_scores(
-    input_file: str,
-    output_file: str,
-    judge_client: OpenAI,
-    judge_model: str,
-):
-    """
-    使用AI裁判为报告打多维度分数 (0-4档)
+def _score_single_pair(args):
+    """单个对比对打分任务（用于并发）"""
+    (pair, judge_config, judge_model) = args
     
-    三个核心维度：
-    1. 分析深度 (depth): 0-4分
-    2. 专业度 (professionalism): 0-4分  
-    3. 数值计算准确性 (accuracy): 0-4分
+    judge_client = OpenAI(api_key=judge_config["api_key"], base_url=judge_config["base_url"])
     
-    评分标准：
-    - 4分：优秀
-    - 3分：良好
-    - 2分：中等
-    - 1分：较差
-    - 0分：很差
-    """
-    pairs = []
-    with open(input_file, "r", encoding="utf-8") as f:
-        for line in f:
-            pairs.append(json.loads(line))
-
-    scored_pairs = []
-
-    with tqdm(total=len(pairs), desc="AI裁判多维度打分") as pbar:
-        for pair in pairs:
-            try:
-                # Create judge prompt for multi-dimensional scoring
-                judge_prompt = f"""你是一位资深的财务分析专家，负责评估财务分析报告的质量。
+    try:
+        # Create judge prompt for multi-dimensional scoring
+        judge_prompt = f"""你是一位资深的财务分析专家，负责评估财务分析报告的质量。
 
 请对以下两份报告在三个核心维度上进行评分。每个维度使用0-4分的5档评分制：
 - **4分（优秀）**：该维度表现卓越，完全符合高质量标准
@@ -537,44 +580,98 @@ def add_multidim_scores(
 3. 请根据实际内容客观评分，不要因为标注为"黄金"就自动给高分
 """
 
-                response = judge_client.chat.completions.create(
-                    model=judge_model,
-                    messages=[{"role": "user", "content": judge_prompt}],
-                    temperature=0.3,
-                    response_format={"type": "json_object"},
-                )
+        response = judge_client.chat.completions.create(
+            model=judge_model,
+            messages=[{"role": "user", "content": judge_prompt}],
+            temperature=0.3,
+            response_format={"type": "json_object"},
+        )
 
-                score_result = json.loads(response.choices[0].message.content)
+        score_result = json.loads(response.choices[0].message.content)
 
-                # Validate scores are in 0-4 range
-                for report_type in ["chosen_scores", "rejected_scores"]:
-                    for dim in ["depth", "professionalism", "accuracy"]:
-                        score = score_result[report_type][dim]
-                        if not isinstance(score, int) or not (0 <= score <= 4):
-                            print(f"\n警告: {report_type}.{dim} 分数异常: {score}，使用默认值2")
-                            score_result[report_type][dim] = 2
+        # Validate scores are in 0-4 range
+        for report_type in ["chosen_scores", "rejected_scores"]:
+            for dim in ["depth", "professionalism", "accuracy"]:
+                score = score_result[report_type][dim]
+                if not isinstance(score, int) or not (0 <= score <= 4):
+                    print(f"\n警告: {report_type}.{dim} 分数异常: {score}，使用默认值2")
+                    score_result[report_type][dim] = 2
 
-                # 构建符合ScoresData模型的数据结构
-                scores_data = {
-                    "chosen": score_result["chosen_scores"],  # dict with depth, professionalism, accuracy
-                    "rejected": score_result["rejected_scores"],
-                    "reasoning": score_result["reasoning"],
-                    "overall_assessment": score_result.get("overall_assessment", ""),
-                }
-                
-                # Add scores to pair
-                pair["scores"] = scores_data
+        # 构建符合ScoresData模型的数据结构
+        scores_data = {
+            "chosen": score_result["chosen_scores"],
+            "rejected": score_result["rejected_scores"],
+            "reasoning": score_result["reasoning"],
+            "overall_assessment": score_result.get("overall_assessment", ""),
+        }
+        
+        # Add scores to pair
+        pair["scores"] = scores_data
+        return pair
 
-                scored_pairs.append(pair)
+    except Exception as e:
+        print(f"\n打分时出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return pair  # Return without scores
 
-            except Exception as e:
-                print(f"\n打分时出错: {e}")
-                import traceback
-                traceback.print_exc()
-                # Keep pair without scores
-                scored_pairs.append(pair)
 
-            pbar.update(1)
+def add_multidim_scores(
+    input_file: str,
+    output_file: str,
+    judge_client: OpenAI,
+    judge_model: str,
+    use_parallel: bool = True,
+    max_workers: int = None,
+):
+    """
+    使用AI裁判为报告打多维度分数 (0-4档)
+    
+    三个核心维度：
+    1. 分析深度 (depth): 0-4分
+    2. 专业度 (professionalism): 0-4分  
+    3. 数值计算准确性 (accuracy): 0-4分
+    
+    评分标准：
+    - 4分：优秀
+    - 3分：良好
+    - 2分：中等
+    - 1分：较差
+    - 0分：很差
+    """
+    pairs = []
+    with open(input_file, "r", encoding="utf-8") as f:
+        for line in f:
+            pairs.append(json.loads(line))
+
+    judge_config = {
+        "api_key": judge_client.api_key,
+        "base_url": judge_client.base_url,
+    }
+    
+    # 准备所有任务参数
+    tasks = [(pair, judge_config, judge_model) for pair in pairs]
+    
+    scored_pairs = []
+    
+    # 并发执行
+    if use_parallel and len(pairs) > 1:
+        workers = max_workers or min(cpu_count(), len(pairs))
+        print(f"使用 {workers} 个并发进程进行打分...")
+        
+        with Pool(processes=workers) as pool:
+            with tqdm(total=len(pairs), desc="AI裁判多维度打分") as pbar:
+                for result in pool.imap_unordered(_score_single_pair, tasks):
+                    scored_pairs.append(result)
+                    pbar.update(1)
+    else:
+        # 串行执行（用于调试）
+        print("串行模式进行打分...")
+        with tqdm(total=len(pairs), desc="AI裁判多维度打分") as pbar:
+            for task in tasks:
+                result = _score_single_pair(task)
+                scored_pairs.append(result)
+                pbar.update(1)
 
     # Save scored pairs
     with open(output_file, "w", encoding="utf-8") as f:
@@ -640,6 +737,8 @@ if __name__ == "__main__":
         sample_data=SAMPLE_DATA,
         n_pairs_per_field=10,  # 每个行业生成10个对比对
         output_dir=output_dir,
+        use_parallel=True,  # 启用并发
+        max_workers=None,  # 自动选择worker数量
     )
 
     # Step 2: Add multi-dimensional scores
@@ -657,6 +756,8 @@ if __name__ == "__main__":
         output_file=scored_output_file,
         judge_client=judge_client,
         judge_model="qwen-max",  # Use strongest model as judge
+        use_parallel=True,  # 启用并发
+        max_workers=None,  # 自动选择worker数量
     )
 
     print("\n" + "=" * 70)
