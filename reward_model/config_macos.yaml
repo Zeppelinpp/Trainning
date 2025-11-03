@@ -21,9 +21,9 @@ distributed:
   find_unused_parameters: false
   
 data:
-  train_file: "data/train.jsonl"
-  val_file: "data/val.jsonl"
-  test_file: "data/test.jsonl"
+  train_file: "reward_model/data/train.jsonl"
+  val_file: "reward_model/data/val.jsonl"
+  test_file: "reward_model/data/test.jsonl"
   
 reward_dimensions:
   dimensions:
