@@ -732,23 +732,21 @@ def add_multidim_scores(
 
     print(f"\n完成打分，保存至 {output_file}")
 
-
 if __name__ == "__main__":
     # Sample data description (you can replace with actual data)
     SAMPLE_DATA = """
-利润分析数据:
-{{profit_analysis_data}}
+    利润分析数据:
+    {{profit_analysis_data}}
 
-维度穿透分析数据:
-{{dimension_analysis_data}}
+    维度穿透分析数据:
+    {{dimension_analysis_data}}
 
-行业特色指标 & 均值:
-{{industry_indicators}}
+    行业特色指标 & 均值:
+    {{industry_indicators}}
 
-预算数据:
-{{budget_data}}
-"""
-
+    预算数据:
+    {{budget_data}}
+    """
     # 配置
     fields = ["制造业", "服务业", "金融业", "房地产", "科技业"]
     framework_dir = "./reward_model/data/analysis_framework/"
