@@ -287,10 +287,10 @@ def _generate_single_pair(args):
         sample_data,
     ) = args
     
-    client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
-    model = model_config["model"]
-    
     try:
+        client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
+        model = model_config["model"]
+        
         # Generate gold standard
         complete_prompt, gold_response, gold_metadata = generate_gold_response(
             client=client,
@@ -321,10 +321,8 @@ def _generate_single_pair(args):
 
         return pair.model_dump()
     except Exception as e:
-        print(f"\n生成对比对时出错: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        # Return error info as dict to avoid serialization issues
+        return {"error": str(e), "field": field}
 
 
 def generate_comparison_pair(
@@ -484,7 +482,10 @@ def generate_comparison_dataset(
             with tqdm(total=total_pairs, desc="生成对比对") as pbar:
                 for result in pool.imap_unordered(_generate_single_pair, tasks):
                     if result is not None:
-                        comparison_pairs.append(result)
+                        if "error" in result:
+                            print(f"\n生成对比对时出错 ({result.get('field', 'unknown')}): {result['error']}")
+                        else:
+                            comparison_pairs.append(result)
                     pbar.update(1)
     else:
         # 串行执行（用于调试）
@@ -509,9 +510,8 @@ def _score_single_pair(args):
     """单个对比对打分任务（用于并发）"""
     (pair, judge_config, judge_model) = args
     
-    judge_client = OpenAI(api_key=judge_config["api_key"], base_url=judge_config["base_url"])
-    
     try:
+        judge_client = OpenAI(api_key=judge_config["api_key"], base_url=judge_config["base_url"])
         # Create judge prompt for multi-dimensional scoring
         judge_prompt = f"""你是一位资深的财务分析专家，负责评估财务分析报告的质量。
 
@@ -610,10 +610,9 @@ def _score_single_pair(args):
         return pair
 
     except Exception as e:
-        print(f"\n打分时出错: {e}")
-        import traceback
-        traceback.print_exc()
-        return pair  # Return without scores
+        # Return error info to avoid serialization issues
+        pair["score_error"] = str(e)
+        return pair
 
 
 def add_multidim_scores(
@@ -662,6 +661,8 @@ def add_multidim_scores(
         with Pool(processes=workers) as pool:
             with tqdm(total=len(pairs), desc="AI裁判多维度打分") as pbar:
                 for result in pool.imap_unordered(_score_single_pair, tasks):
+                    if "score_error" in result:
+                        print(f"\n打分时出错: {result['score_error']}")
                     scored_pairs.append(result)
                     pbar.update(1)
     else:

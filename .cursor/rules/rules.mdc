@@ -5,4 +5,4 @@ alwaysApply: true
 # Write comments to notify the shape of tensor during training or modeling
 # Only write docs about data flow in training and dataset preparation
 # Write docs in docs folder
-# Don't write any docs unless I ask you to
+# DO NOT WRITE AND README UNLESS I ASK YOU TO

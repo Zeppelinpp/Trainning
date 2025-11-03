@@ -33,10 +33,11 @@ def _gen_single_framework(args):
         idx,
     ) = args
     
-    client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
-    model = model_config["model"]
-    
-    prompt = f"""
+    try:
+        client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
+        model = model_config["model"]
+        
+        prompt = f"""
 你需要创建一个新的财务分析框架，用于指导{field}企业的财务分析报告生成。
 
 # 分析视角
@@ -62,22 +63,25 @@ def _gen_single_framework(args):
 
 仅输出新的分析框架，不要任何其他说明文字。
 """
-    
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": prompt}],
-        temperature=random.uniform(0.7, 1.3),
-        seed=random.randint(1, 1000000),
-    )
-    
-    file_name = f"{model}_{field}_framework_{idx + 1}.md"
-    content = response.choices[0].message.content
-    file_path = f"./reward_model/data/analysis_framework/{file_name}"
-    
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    
-    return file_name
+        
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": prompt}],
+            temperature=random.uniform(0.7, 1.3),
+            seed=random.randint(1, 1000000),
+        )
+        
+        file_name = f"{model}_{field}_framework_{idx + 1}.md"
+        content = response.choices[0].message.content
+        file_path = f"./reward_model/data/analysis_framework/{file_name}"
+        
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        
+        return file_name
+    except Exception as e:
+        # Return error as string to avoid serialization issues
+        return f"ERROR: {str(e)}"
 
 
 def gen_framework(
@@ -176,19 +180,20 @@ def _gen_single_sys_prompt(args):
         idx,
     ) = args
     
-    client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
-    model = model_config["model"]
-    
-    if is_positive:
-        requirements_text = "\n".join(
-            [
-                f"**{aspect['focus']}**：\n"
-                + "\n".join([f"- {req}" for req in aspect["requirements"]])
-                for aspect in selected_aspects_or_styles
-            ]
-        )
+    try:
+        client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
+        model = model_config["model"]
+        
+        if is_positive:
+            requirements_text = "\n".join(
+                [
+                    f"**{aspect['focus']}**：\n"
+                    + "\n".join([f"- {req}" for req in aspect["requirements"]])
+                    for aspect in selected_aspects_or_styles
+                ]
+            )
 
-        prompt = f"""
+            prompt = f"""
 你需要创建一个系统提示词，用于指导AI生成高质量的{field}财务分析报告。
 
 # 核心目标
@@ -212,16 +217,16 @@ def _gen_single_sys_prompt(args):
 
 请生成一个全新的系统提示词，确保与已有提示词有明显差异。仅输出系统提示词内容，不要任何其他说明。
 """
-    else:
-        characteristics_text = "\n".join(
-            [
-                f"**{style['style']}**：\n"
-                + "\n".join([f"- {char}" for char in style["characteristics"]])
-                for style in selected_aspects_or_styles
-            ]
-        )
+        else:
+            characteristics_text = "\n".join(
+                [
+                    f"**{style['style']}**：\n"
+                    + "\n".join([f"- {char}" for char in style["characteristics"]])
+                    for style in selected_aspects_or_styles
+                ]
+            )
 
-        prompt = f"""
+            prompt = f"""
 你需要创建一个系统提示词，用于指导AI生成{field}财务分析报告。这个提示词应该是"宽松标准"的，不需要过于严格的质量要求。
 
 # 核心目标
@@ -243,21 +248,24 @@ def _gen_single_sys_prompt(args):
 请生成一个系统提示词，体现"够用即可"的实用主义风格。仅输出系统提示词内容，不要任何其他说明。
 """
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "system", "content": prompt}],
-        temperature=random.uniform(0.7, 1.3),
-        seed=random.randint(1, 1000000),
-    )
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": prompt}],
+            temperature=random.uniform(0.7, 1.3),
+            seed=random.randint(1, 1000000),
+        )
 
-    file_name = f"{'positive' if is_positive else 'negative'}_{model}_{field}_sys_prompt_{idx + 1}.md"
-    content = response.choices[0].message.content
-    file_path = f"./reward_model/data/system_prompt/{file_name}"
-    
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(content)
+        file_name = f"{'positive' if is_positive else 'negative'}_{model}_{field}_sys_prompt_{idx + 1}.md"
+        content = response.choices[0].message.content
+        file_path = f"./reward_model/data/system_prompt/{file_name}"
+        
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(content)
 
-    return file_name
+        return file_name
+    except Exception as e:
+        # Return error as string to avoid serialization issues
+        return f"ERROR: {str(e)}"
 
 
 def gen_sys_prompt(
