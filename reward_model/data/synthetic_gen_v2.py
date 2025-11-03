@@ -20,6 +20,7 @@ class ModelConfig(BaseModel):
 
 class ScoresDimension(BaseModel):
     """单个响应的三维度评分"""
+
     depth: int  # 0-4
     professionalism: int  # 0-4
     accuracy: int  # 0-4
@@ -27,6 +28,7 @@ class ScoresDimension(BaseModel):
 
 class ScoresData(BaseModel):
     """完整的评分数据"""
+
     chosen: ScoresDimension
     rejected: ScoresDimension
     reasoning: Dict[str, str]  # 每个维度的对比理由
@@ -36,7 +38,9 @@ class ScoresData(BaseModel):
 class ComparisonPair(BaseModel):
     """对比对数据结构"""
 
-    prompt: str  # 完整的用户输入（角色定义 + system_prompt + analysis_framework + 数据）
+    prompt: (
+        str  # 完整的用户输入（角色定义 + system_prompt + analysis_framework + 数据）
+    )
     chosen: str  # 黄金响应
     rejected: str  # 缺陷响应
     metadata: Dict[str, Any]  # 元数据：行业、模型、质量维度等
@@ -199,7 +203,7 @@ def generate_gold_response(
 ) -> tuple[str, str, Dict[str, Any]]:
     """
     生成黄金标准响应
-    
+
     Returns:
         (complete_prompt, response_text, metadata)
     """
@@ -209,7 +213,7 @@ def generate_gold_response(
         analysis_framework=analysis_framework,
         data=sample_data,
     )
-    
+
     # 添加明确的优质输出指示
     instruction = """
 请严格按照上述指引和分析框架生成高质量的财务分析报告。
@@ -220,7 +224,7 @@ def generate_gold_response(
 3. 体现行业专业性，使用专业术语
 4. 全面覆盖分析框架中的所有要点
 """
-    
+
     full_prompt = complete_prompt + instruction
 
     response = client.chat.completions.create(
@@ -252,11 +256,9 @@ def generate_defect_response(
         (response_text, metadata)
     """
     # Get degradation template
-    degradation_template = generate_quality_prompt_template(
-        field, quality_type="low"
-    )
+    degradation_template = generate_quality_prompt_template(field, quality_type="low")
 
-    full_prompt = f"""{degradation_template['template']}
+    full_prompt = f"""{degradation_template["template"]}
 
 {gold_response}
 """
@@ -286,11 +288,13 @@ def _generate_single_pair(args):
         analysis_framework,
         sample_data,
     ) = args
-    
+
     try:
-        client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
+        client = OpenAI(
+            api_key=model_config["api_key"], base_url=model_config["base_url"]
+        )
         model = model_config["model"]
-        
+
         # Generate gold standard
         complete_prompt, gold_response, gold_metadata = generate_gold_response(
             client=client,
@@ -378,16 +382,16 @@ def load_frameworks(framework_dir: str) -> List[str]:
     frameworks = []
     if not os.path.exists(framework_dir):
         raise ValueError(f"Framework directory not found: {framework_dir}")
-    
+
     for file in os.listdir(framework_dir):
         if file.endswith(".md"):
             file_path = os.path.join(framework_dir, file)
             with open(file_path, "r", encoding="utf-8") as f:
                 frameworks.append(f.read())
-    
+
     if not frameworks:
         raise ValueError(f"No framework files found in {framework_dir}")
-    
+
     return frameworks
 
 
@@ -396,16 +400,16 @@ def load_system_prompts(system_prompt_dir: str) -> List[str]:
     system_prompts = []
     if not os.path.exists(system_prompt_dir):
         raise ValueError(f"System prompt directory not found: {system_prompt_dir}")
-    
+
     for file in os.listdir(system_prompt_dir):
-        if file.endswith(".md"):
+        if file.endswith(".md") and file.startswith("positive"):
             file_path = os.path.join(system_prompt_dir, file)
             with open(file_path, "r", encoding="utf-8") as f:
                 system_prompts.append(f.read())
-    
+
     if not system_prompts:
         raise ValueError(f"No system prompt files found in {system_prompt_dir}")
-    
+
     return system_prompts
 
 
@@ -437,17 +441,17 @@ def generate_comparison_dataset(
     # 确保输出目录存在
     os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(output_dir, "comparison_pairs.jsonl")
-    
+
     # Load frameworks and system prompts
     print("加载分析框架和系统提示词...")
     frameworks = load_frameworks(framework_dir)
     system_prompts = load_system_prompts(system_prompt_dir)
-    
+
     print(f"已加载 {len(frameworks)} 个分析框架")
     print(f"已加载 {len(system_prompts)} 个系统提示词")
 
     total_pairs = len(fields) * n_pairs_per_field
-    
+
     # 准备所有任务参数
     tasks = []
     for field in fields:
@@ -456,34 +460,38 @@ def generate_comparison_dataset(
             framework = random.choice(frameworks)
             system_prompt = random.choice(system_prompts)
             model_config = random.choice(model_configs)
-            
+
             model_config_dict = {
                 "model": model_config.model,
                 "api_key": model_config.api_key,
                 "base_url": model_config.base_url,
             }
-            
-            tasks.append((
-                model_config_dict,
-                field,
-                system_prompt,
-                framework,
-                sample_data,
-            ))
-    
+
+            tasks.append(
+                (
+                    model_config_dict,
+                    field,
+                    system_prompt,
+                    framework,
+                    sample_data,
+                )
+            )
+
     comparison_pairs = []
-    
+
     # 并发执行
     if use_parallel and total_pairs > 1:
         workers = max_workers or min(cpu_count(), total_pairs)
         print(f"使用 {workers} 个并发进程生成对比对...")
-        
+
         with Pool(processes=workers) as pool:
             with tqdm(total=total_pairs, desc="生成对比对") as pbar:
                 for result in pool.imap_unordered(_generate_single_pair, tasks):
                     if result is not None:
                         if "error" in result:
-                            print(f"\n生成对比对时出错 ({result.get('field', 'unknown')}): {result['error']}")
+                            print(
+                                f"\n生成对比对时出错 ({result.get('field', 'unknown')}): {result['error']}"
+                            )
                         else:
                             comparison_pairs.append(result)
                     pbar.update(1)
@@ -509,9 +517,11 @@ def generate_comparison_dataset(
 def _score_single_pair(args):
     """单个对比对打分任务（用于并发）"""
     (pair, judge_config, judge_model) = args
-    
+
     try:
-        judge_client = OpenAI(api_key=judge_config["api_key"], base_url=judge_config["base_url"])
+        judge_client = OpenAI(
+            api_key=judge_config["api_key"], base_url=judge_config["base_url"]
+        )
         # Create judge prompt for multi-dimensional scoring
         judge_prompt = f"""你是一位资深的财务分析专家，负责评估财务分析报告的质量。
 
@@ -546,13 +556,13 @@ def _score_single_pair(args):
    - 0分：计算完全错误或缺失
 
 **用户需求**：
-{pair['prompt'][:500]}...
+{pair["prompt"][:500]}...
 
 **报告A（黄金响应）**：
-{pair['chosen'][:3000]}...
+{pair["chosen"][:3000]}...
 
 **报告B（缺陷响应）**：
-{pair['rejected'][:3000]}...
+{pair["rejected"][:3000]}...
 
 请以JSON格式输出评分结果：
 {{
@@ -604,7 +614,7 @@ def _score_single_pair(args):
             "reasoning": score_result["reasoning"],
             "overall_assessment": score_result.get("overall_assessment", ""),
         }
-        
+
         # Add scores to pair
         pair["scores"] = scores_data
         return pair
@@ -625,12 +635,12 @@ def add_multidim_scores(
 ):
     """
     使用AI裁判为报告打多维度分数 (0-4档)
-    
+
     三个核心维度：
     1. 分析深度 (depth): 0-4分
-    2. 专业度 (professionalism): 0-4分  
+    2. 专业度 (professionalism): 0-4分
     3. 数值计算准确性 (accuracy): 0-4分
-    
+
     评分标准：
     - 4分：优秀
     - 3分：良好
@@ -647,17 +657,17 @@ def add_multidim_scores(
         "api_key": judge_client.api_key,
         "base_url": judge_client.base_url,
     }
-    
+
     # 准备所有任务参数
     tasks = [(pair, judge_config, judge_model) for pair in pairs]
-    
+
     scored_pairs = []
-    
+
     # 并发执行
     if use_parallel and len(pairs) > 1:
         workers = max_workers or min(cpu_count(), len(pairs))
         print(f"使用 {workers} 个并发进程进行打分...")
-        
+
         with Pool(processes=workers) as pool:
             with tqdm(total=len(pairs), desc="AI裁判多维度打分") as pbar:
                 for result in pool.imap_unordered(_score_single_pair, tasks):
@@ -701,7 +711,7 @@ if __name__ == "__main__":
     framework_dir = "./reward_model/data/analysis_framework/"
     system_prompt_dir = "./reward_model/data/system_prompt/"
     output_dir = "./reward_model/data/dataset/"
-    
+
     model_configs = [
         ModelConfig(
             model="qwen-plus",
@@ -747,9 +757,7 @@ if __name__ == "__main__":
     print("第二步：AI裁判多维度打分")
     print("=" * 70)
 
-    judge_client = OpenAI(
-        api_key=os.getenv("QWEN_KEY"), base_url=os.getenv("QWEN_URL")
-    )
+    judge_client = OpenAI(api_key=os.getenv("QWEN_KEY"), base_url=os.getenv("QWEN_URL"))
 
     scored_output_file = os.path.join(output_dir, "comparison_pairs_scored.jsonl")
     add_multidim_scores(
@@ -766,4 +774,3 @@ if __name__ == "__main__":
     print("=" * 70)
     print(f"未打分数据: {output_file}")
     print(f"已打分数据: {scored_output_file}")
-

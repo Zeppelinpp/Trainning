@@ -32,11 +32,13 @@ def _gen_single_framework(args):
         selected_variations,
         idx,
     ) = args
-    
+
     try:
-        client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
+        client = OpenAI(
+            api_key=model_config["api_key"], base_url=model_config["base_url"]
+        )
         model = model_config["model"]
-        
+
         prompt = f"""
 你需要创建一个新的财务分析框架，用于指导{field}企业的财务分析报告生成。
 
@@ -63,21 +65,21 @@ def _gen_single_framework(args):
 
 仅输出新的分析框架，不要任何其他说明文字。
 """
-        
+
         response = client.chat.completions.create(
             model=model,
             messages=[{"role": "system", "content": prompt}],
             temperature=random.uniform(0.7, 1.3),
             seed=random.randint(1, 1000000),
         )
-        
+
         file_name = f"{model}_{field}_framework_{idx + 1}.md"
         content = response.choices[0].message.content
         file_path = f"./reward_model/data/analysis_framework/{file_name}"
-        
+
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
-        
+
         return file_name
     except Exception as e:
         # Return error as string to avoid serialization issues
@@ -124,8 +126,12 @@ def gen_framework(
 
     # 准备所有任务参数
     tasks = []
-    model_config = {"model": model, "api_key": client.api_key, "base_url": client.base_url}
-    
+    model_config = {
+        "model": model,
+        "api_key": client.api_key,
+        "base_url": client.base_url,
+    }
+
     for i in range(n_samples):
         perspective = random.choice(framework_perspectives)
         industry_emphasis = random.choice(
@@ -143,17 +149,19 @@ def gen_framework(
             "在保持整体结构的基础上创新子章节的分析方法",
         ]
         selected_variations = random.sample(variation_elements, k=random.randint(2, 3))
-        
-        tasks.append((
-            analysis_framework,
-            model_config,
-            field,
-            perspective,
-            industry_emphasis,
-            selected_variations,
-            i,
-        ))
-    
+
+        tasks.append(
+            (
+                analysis_framework,
+                model_config,
+                field,
+                perspective,
+                industry_emphasis,
+                selected_variations,
+                i,
+            )
+        )
+
     # 并发执行
     if use_parallel and n_samples > 1:
         workers = max_workers or min(cpu_count(), n_samples)
@@ -179,11 +187,13 @@ def _gen_single_sys_prompt(args):
         selected_aspects_or_styles,
         idx,
     ) = args
-    
+
     try:
-        client = OpenAI(api_key=model_config["api_key"], base_url=model_config["base_url"])
+        client = OpenAI(
+            api_key=model_config["api_key"], base_url=model_config["base_url"]
+        )
         model = model_config["model"]
-        
+
         if is_positive:
             requirements_text = "\n".join(
                 [
@@ -258,7 +268,7 @@ def _gen_single_sys_prompt(args):
         file_name = f"{'positive' if is_positive else 'negative'}_{model}_{field}_sys_prompt_{idx + 1}.md"
         content = response.choices[0].message.content
         file_path = f"./reward_model/data/system_prompt/{file_name}"
-        
+
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
 
@@ -384,8 +394,12 @@ def gen_sys_prompt(
 
     # 准备所有任务参数
     tasks = []
-    model_config = {"model": model, "api_key": client.api_key, "base_url": client.base_url}
-    
+    model_config = {
+        "model": model,
+        "api_key": client.api_key,
+        "base_url": client.base_url,
+    }
+
     for i in range(n_samples):
         is_positive = random.choice([True, False])
 
@@ -395,16 +409,18 @@ def gen_sys_prompt(
         else:
             selected_styles = random.sample(negative_aspects, k=random.randint(2, 3))
             selected_items = selected_styles
-        
-        tasks.append((
-            field,
-            sample_system_prompt,
-            model_config,
-            is_positive,
-            selected_items,
-            i,
-        ))
-    
+
+        tasks.append(
+            (
+                field,
+                sample_system_prompt,
+                model_config,
+                is_positive,
+                selected_items,
+                i,
+            )
+        )
+
     # 并发执行
     if use_parallel and n_samples > 1:
         workers = max_workers or min(cpu_count(), n_samples)
