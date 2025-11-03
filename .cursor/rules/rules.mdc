@@ -1,0 +1,6 @@
+---
+alwaysApply: true
+---
+
+# Write comments to notify the shape of tensor during training or modeling
+# Only write docs about data flow in training and dataset preparation
