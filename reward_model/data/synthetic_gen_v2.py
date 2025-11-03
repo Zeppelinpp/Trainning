@@ -11,6 +11,9 @@ from functools import partial
 
 load_dotenv()
 
+# Qwen API 最大输入长度限制（字符数，留一些余量）
+MAX_INPUT_LENGTH = 30000  # 实际限制是 30720，留 720 的余量
+
 
 class ModelConfig(BaseModel):
     model: str
@@ -172,12 +175,21 @@ def generate_quality_prompt_template(field: str, quality_type: str = "high") -> 
         return random.choice(templates)
 
 
+def truncate_text(text: str, max_length: int) -> str:
+    """截断文本到指定长度，保留开头部分"""
+    if len(text) <= max_length:
+        return text
+    return text[:max_length] + "\n\n[...数据已截断...]"
+
+
 def build_complete_prompt(
     system_prompt: str,
     analysis_framework: str,
     data: str,
 ) -> str:
-    return f"""你是一个专业的财务分析师
+    """构建完整的 prompt，自动处理长度限制"""
+    # 基础模板固定部分
+    base_template = """你是一个专业的财务分析师
 
 指引
 
@@ -191,6 +203,33 @@ def build_complete_prompt(
 
 {data}
 """
+    
+    # 计算基础模板的固定部分长度（不含占位符）
+    base_fixed_length = len(base_template) - len("{system_prompt}") - len("{analysis_framework}") - len("{data}")
+    
+    # 计算可用长度
+    available_length = MAX_INPUT_LENGTH - base_fixed_length
+    
+    # 优先保留 system_prompt 和 analysis_framework，截断 data
+    system_prompt_len = len(system_prompt)
+    framework_len = len(analysis_framework)
+    data_len = len(data)
+    
+    total_required = system_prompt_len + framework_len + data_len
+    
+    if total_required <= available_length:
+        # 不需要截断
+        truncated_data = data
+    else:
+        # 需要截断 data 部分
+        data_max_length = max(0, available_length - system_prompt_len - framework_len)
+        truncated_data = truncate_text(data, data_max_length)
+    
+    return base_template.format(
+        system_prompt=system_prompt,
+        analysis_framework=analysis_framework,
+        data=truncated_data
+    )
 
 
 def generate_gold_response(
@@ -226,6 +265,14 @@ def generate_gold_response(
 """
 
     full_prompt = complete_prompt + instruction
+    
+    # 最终检查：如果仍然超过限制，截断 complete_prompt（保留 instruction）
+    instruction_len = len(instruction)
+    max_complete_prompt_len = MAX_INPUT_LENGTH - instruction_len
+    
+    if len(complete_prompt) > max_complete_prompt_len:
+        complete_prompt = truncate_text(complete_prompt, max_complete_prompt_len)
+        full_prompt = complete_prompt + instruction
 
     response = client.chat.completions.create(
         model=model,
@@ -258,9 +305,20 @@ def generate_defect_response(
     # Get degradation template
     degradation_template = generate_quality_prompt_template(field, quality_type="low")
 
-    full_prompt = f"""{degradation_template["template"]}
+    template_text = degradation_template["template"]
+    template_len = len(template_text)
+    
+    # 计算可用的 gold_response 长度
+    available_response_len = MAX_INPUT_LENGTH - template_len - 10  # 10 是额外的格式化字符
+    
+    if len(gold_response) > available_response_len:
+        truncated_response = truncate_text(gold_response, available_response_len)
+    else:
+        truncated_response = gold_response
 
-{gold_response}
+    full_prompt = f"""{template_text}
+
+{truncated_response}
 """
 
     response = client.chat.completions.create(
@@ -286,7 +344,8 @@ def _generate_single_pair(args):
         field,
         system_prompt,
         analysis_framework,
-        sample_data,
+        sample_data_template,
+        data_sample_dir,
     ) = args
 
     try:
@@ -294,6 +353,14 @@ def _generate_single_pair(args):
             api_key=model_config["api_key"], base_url=model_config["base_url"]
         )
         model = model_config["model"]
+        
+        # 按行业加载数据（只加载当前行业的数据）
+        if data_sample_dir and os.path.exists(data_sample_dir):
+            data_dict = load_sample_data(data_sample_dir, field=field)
+            # 替换模板变量
+            sample_data = replace_data_template(sample_data_template, data_dict)
+        else:
+            sample_data = sample_data_template
 
         # Generate gold standard
         complete_prompt, gold_response, gold_metadata = generate_gold_response(
@@ -413,8 +480,69 @@ def load_system_prompts(system_prompt_dir: str) -> List[str]:
     return system_prompts
 
 
-def load_sample_data(data_sample_dir: str) -> Dict[str, str]:
-    """加载样例数据文件"""
+def extract_industry_indicators(content: str, field: str) -> str:
+    """从 industry_indicators.md 中提取特定行业的数据"""
+    # 行业名称映射（匹配文件中的章节标题）
+    industry_mapping = {
+        "制造业": "一、制造业",
+        "服务业": "二、服务业",
+        "金融业": "三、金融业",
+        "房地产": "四、房地产",
+        "科技业": "五、科技业",
+    }
+    
+    target_section = industry_mapping.get(field)
+    if not target_section:
+        return ""
+    
+    lines = content.split('\n')
+    start_idx = None
+    end_idx = None
+    
+    # 查找目标行业的起始位置（匹配 "## 一、制造业行业指标" 这样的格式）
+    for i, line in enumerate(lines):
+        if target_section in line and line.startswith('##'):
+            start_idx = i
+            break
+    
+    if start_idx is None:
+        return ""
+    
+    # 查找下一个行业的起始位置（查找下一个以 "##" 开头且包含 "行业指标" 的行）
+    for i in range(start_idx + 1, len(lines)):
+        if lines[i].startswith('##') and '行业指标' in lines[i]:
+            # 确保不是当前行业
+            if target_section not in lines[i]:
+                end_idx = i
+                break
+    
+    # 如果没有找到下一个行业章节，查找其他主要章节（"## 六" 或 "## 七"）
+    if end_idx is None:
+        for i in range(start_idx + 1, len(lines)):
+            if lines[i].startswith('## 六') or lines[i].startswith('## 七'):
+                end_idx = i
+                break
+    
+    # 如果还是没找到，提取到文件结尾
+    if end_idx is None:
+        end_idx = len(lines)
+    
+    # 提取行业数据
+    industry_data = '\n'.join(lines[start_idx:end_idx])
+    
+    # 添加头部说明
+    header = f"# {field}行业特色指标 & 均值数据\n\n**数据期间**: 2025年3月\n\n---\n\n"
+    
+    return header + industry_data
+
+
+def load_sample_data(data_sample_dir: str, field: str = None) -> Dict[str, str]:
+    """加载样例数据文件
+    
+    Args:
+        data_sample_dir: 数据文件目录
+        field: 行业名称，如果提供则只加载该行业的指标数据
+    """
     data_files = {
         "profit_analysis_data": "profit_analysis_data.md",
         "dimension_analysis_data": "dimension_analysis_data.md",
@@ -427,7 +555,13 @@ def load_sample_data(data_sample_dir: str) -> Dict[str, str]:
         file_path = os.path.join(data_sample_dir, filename)
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
-                loaded_data[key] = f.read()
+                content = f.read()
+                
+            # 如果是行业指标且提供了行业参数，则提取特定行业的数据
+            if key == "industry_indicators" and field:
+                loaded_data[key] = extract_industry_indicators(content, field)
+            else:
+                loaded_data[key] = content
         else:
             print(f"警告: 数据文件 {file_path} 不存在，将使用空字符串")
             loaded_data[key] = ""
@@ -483,13 +617,7 @@ def generate_comparison_dataset(
     print(f"已加载 {len(frameworks)} 个分析框架")
     print(f"已加载 {len(system_prompts)} 个系统提示词")
     
-    # 加载样例数据文件（如果提供了数据目录）
-    if data_sample_dir and os.path.exists(data_sample_dir):
-        print(f"加载样例数据文件从 {data_sample_dir}...")
-        data_dict = load_sample_data(data_sample_dir)
-        # 替换模板变量
-        sample_data = replace_data_template(sample_data, data_dict)
-        print("样例数据文件加载完成")
+    # 注意：这里不再统一加载数据，而是在每个任务中按行业加载
 
     total_pairs = len(fields) * n_pairs_per_field
 
@@ -514,7 +642,8 @@ def generate_comparison_dataset(
                     field,
                     system_prompt,
                     framework,
-                    sample_data,
+                    sample_data,  # 这是模板，不是实际数据
+                    data_sample_dir,  # 传递数据目录，让每个任务按行业加载
                 )
             )
 
@@ -564,7 +693,8 @@ def _score_single_pair(args):
             api_key=judge_config["api_key"], base_url=judge_config["base_url"]
         )
         # Create judge prompt for multi-dimensional scoring
-        judge_prompt = f"""你是一位资深的财务分析专家，负责评估财务分析报告的质量。
+        # 基础模板（不含动态内容）
+        base_template = """你是一位资深的财务分析专家，负责评估财务分析报告的质量。
 
 请对以下两份报告在三个核心维度上进行评分。每个维度使用0-4分的5档评分制：
 - **4分（优秀）**：该维度表现卓越，完全符合高质量标准
@@ -597,13 +727,13 @@ def _score_single_pair(args):
    - 0分：计算完全错误或缺失
 
 **用户需求**：
-{pair["prompt"][:500]}...
+{user_prompt}
 
 **报告A（黄金响应）**：
-{pair["chosen"][:3000]}...
+{chosen_report}
 
 **报告B（缺陷响应）**：
-{pair["rejected"][:3000]}...
+{rejected_report}
 
 请以JSON格式输出评分结果：
 {{
@@ -630,6 +760,29 @@ def _score_single_pair(args):
 2. 黄金响应通常应该在各维度上得分更高（除非降级失败）
 3. 请根据实际内容客观评分，不要因为标注为"黄金"就自动给高分
 """
+        
+        # 计算基础模板的固定部分长度（不含占位符）
+        base_fixed_length = len(base_template) - len("{user_prompt}") - len("{chosen_report}") - len("{rejected_report}")
+        
+        # 计算可用长度
+        available_length = MAX_INPUT_LENGTH - base_fixed_length
+        
+        # 分配长度：优先保证 prompt 和 chosen，然后 rejected
+        # 按比例分配：prompt 20%, chosen 40%, rejected 40%
+        prompt_max_len = min(500, int(available_length * 0.2))
+        chosen_max_len = min(3000, int(available_length * 0.4))
+        rejected_max_len = min(3000, available_length - prompt_max_len - chosen_max_len)
+        
+        # 截断各部分
+        user_prompt = truncate_text(pair["prompt"], prompt_max_len)
+        chosen_report = truncate_text(pair["chosen"], chosen_max_len)
+        rejected_report = truncate_text(pair["rejected"], rejected_max_len)
+        
+        judge_prompt = base_template.format(
+            user_prompt=user_prompt,
+            chosen_report=chosen_report,
+            rejected_report=rejected_report
+        )
 
         response = judge_client.chat.completions.create(
             model=judge_model,
@@ -756,7 +909,17 @@ if __name__ == "__main__":
 
     model_configs = [
         ModelConfig(
+            model="qwen-turbo",
+            base_url=os.getenv("QWEN_URL"),
+            api_key=os.getenv("QWEN_KEY"),
+        ),
+        ModelConfig(
             model="qwen-plus",
+            base_url=os.getenv("QWEN_URL"),
+            api_key=os.getenv("QWEN_KEY"),
+        ),
+        ModelConfig(
+            model="qwen-max",
             base_url=os.getenv("QWEN_URL"),
             api_key=os.getenv("QWEN_KEY"),
         ),
@@ -766,12 +929,17 @@ if __name__ == "__main__":
             api_key=os.getenv("QWEN_KEY"),
         ),
         ModelConfig(
-            model="deepseek-chat",
-            base_url=os.getenv("DS_URL"),
-            api_key=os.getenv("DS_KEY"),
+            model="qwen2.5-72b-instruct",
+            base_url=os.getenv("QWEN_URL"),
+            api_key=os.getenv("QWEN_KEY"),
         ),
         ModelConfig(
-            model="qwen-turbo",
+            model="qwen2.5-14b-instruct",
+            base_url=os.getenv("QWEN_URL"),
+            api_key=os.getenv("QWEN_KEY"),
+        ),
+        ModelConfig(
+            model="qwen2.5-7b-instruct",
             base_url=os.getenv("QWEN_URL"),
             api_key=os.getenv("QWEN_KEY"),
         ),
@@ -788,7 +956,7 @@ if __name__ == "__main__":
         framework_dir=framework_dir,
         system_prompt_dir=system_prompt_dir,
         sample_data=SAMPLE_DATA,
-        n_pairs_per_field=10,  # 每个行业生成10个对比对
+        n_pairs_per_field=500,  # 每个行业生成10个对比对
         output_dir=output_dir,
         data_sample_dir=data_sample_dir,  # 传入数据样例目录
         use_parallel=True,  # 启用并发
