@@ -25,29 +25,26 @@ class FinancialRewardDataset(Dataset):
         
         with open(data_path, 'r', encoding='utf-8') as f:
             for line in f:
-                self.data.append(json.loads(line))
+                line = line.strip()
+                if line:  # Skip empty lines
+                    self.data.append(json.loads(line))
     
     def __len__(self) -> int:
         return len(self.data)
     
-    def format_input(self, item: Dict) -> str:
-        """格式化输入文本"""
-        prompt = f"""### 系统提示
-{item['system_prompt']}
-
-### 输入数据
-{json.dumps(item['input_data'], ensure_ascii=False, indent=2)}
+    def format_input(self, prompt: str, report: str) -> str:
+        """Format input text from prompt and report"""
+        return f"""{prompt}
 
 ### 生成的财务分析报告
-{item['report']}"""
-        return prompt
+{report}"""
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         item = self.data[idx]
         
         if self.mode == "pointwise":
-            # 点式评分模式
-            text = self.format_input(item)
+            # Pointwise scoring mode - use chosen report with its scores
+            text = self.format_input(item['prompt'], item['chosen'])
             
             encoding = self.tokenizer(
                 text,
@@ -57,13 +54,14 @@ class FinancialRewardDataset(Dataset):
                 return_tensors="pt"
             )
             
-            scores = item['scores']
-            # 标准化到0-1范围
+            scores = item['scores']['chosen']
+            # Scores are 0-4, directly use as classification labels (5 classes)
+            # Shape: [num_dimensions] with values 0-4 as class indices
             score_tensor = torch.tensor([
-                scores['accuracy'] / 5.0,
-                scores['professionalism'] / 5.0,
-                scores['depth_of_analysis'] / 5.0
-            ], dtype=torch.float32)
+                scores['depth'],
+                scores['professionalism'],
+                scores['accuracy']
+            ], dtype=torch.long)
             
             return {
                 "input_ids": encoding["input_ids"].squeeze(0),
@@ -72,9 +70,9 @@ class FinancialRewardDataset(Dataset):
             }
         
         elif self.mode == "pairwise":
-            # 成对比较模式
-            chosen_text = self.format_input(item['chosen'])
-            rejected_text = self.format_input(item['rejected'])
+            # Pairwise comparison mode
+            chosen_text = self.format_input(item['prompt'], item['chosen'])
+            rejected_text = self.format_input(item['prompt'], item['rejected'])
             
             chosen_encoding = self.tokenizer(
                 chosen_text,

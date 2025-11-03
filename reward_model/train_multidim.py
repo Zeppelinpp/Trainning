@@ -253,7 +253,7 @@ class MultiDimRewardTrainer:
 def main():
     # Configuration
     config = {
-        "base_model_name": "hfl/chinese-roberta-wwm-ext",  # or your preferred model
+        "base_model_name": "bert-base-chinese",  # or your preferred model
         "data_file": "./reward_model/data/comparison_pairs_scored.jsonl",
         "output_dir": "./reward_model/outputs/multidim",
         "max_length": 2048,

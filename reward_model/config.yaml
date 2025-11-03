@@ -2,7 +2,7 @@
 model:
   base_model: "Qwen/Qwen2.5-7B"  # 可替换为其他基座模型
   max_length: 4096
-  num_labels: 1  # 输出单个总分或3个分数
+  num_classes: 5  # 分类类别数：0-4共5类
 
 training:
   num_epochs: 3
@@ -26,14 +26,15 @@ data:
   test_file: "data/test.jsonl"
   
 reward_dimensions:
-  - accuracy  # 准确度
-  - professionalism  # 专业度
-  - depth_of_analysis  # 分析深度
-  weight_strategy: "average"  # average, weighted, or multi_head
+  dimensions:
+    - depth  # 分析深度
+    - professionalism  # 专业度
+    - accuracy  # 数值准确度
+  weight_strategy: "multi_head"  # average, weighted, or multi_head (multi_head for 3 separate heads)
   dimension_weights:
-    accuracy: 0.4
-    professionalism: 0.3
-    depth_of_analysis: 0.3
+    depth: 0.33
+    professionalism: 0.33
+    accuracy: 0.34
 
 output:
   output_dir: "./output"

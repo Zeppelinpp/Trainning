@@ -1,0 +1,48 @@
+# Reward Model Training Configuration for macOS Testing
+model:
+  base_model: "bert-base-chinese"  # Small BERT model for testing
+  max_length: 512  # Reduced for faster training
+  num_classes: 5  # 分类类别数：0-4共5类
+
+training:
+  num_epochs: 2
+  batch_size: 2  # Small batch size for CPU/MPS
+  gradient_accumulation_steps: 2
+  learning_rate: 0.00002  # 2e-5
+  warmup_ratio: 0.1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  eval_steps: 50
+  save_steps: 100
+  logging_steps: 10
+  
+distributed:
+  backend: "gloo"  # Use gloo for CPU/macOS (instead of nccl)
+  find_unused_parameters: false
+  
+data:
+  train_file: "data/train.jsonl"
+  val_file: "data/val.jsonl"
+  test_file: "data/test.jsonl"
+  
+reward_dimensions:
+  dimensions:
+    - depth  # 分析深度
+    - professionalism  # 专业度
+    - accuracy  # 数值准确度
+  weight_strategy: "multi_head"  # average, weighted, or multi_head (multi_head for 3 separate heads)
+  dimension_weights:
+    depth: 0.33
+    professionalism: 0.33
+    accuracy: 0.34
+
+output:
+  output_dir: "./output"
+  logging_dir: "./logs"
+  save_total_limit: 3
+  
+wandb:
+  enabled: false  # Disable wandb for quick testing
+  project: "financial-reward-model"
+  run_name: "reward-model-macos-test"
+
