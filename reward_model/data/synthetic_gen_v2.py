@@ -695,15 +695,17 @@ def add_multidim_scores(
 if __name__ == "__main__":
     # Sample data description (you can replace with actual data)
     SAMPLE_DATA = """
-# 数据说明
-本次分析基于某公司2024年3月的财务数据：
-- 营业收入：2,380.79万元
-- 净利润：588.22万元
-- 毛利率：69.08%
-- 总资产：5,280.45万元
-- 净资产：2,892.17万元
+利润分析数据:
+{{profit_analysis_data}}
 
-请基于这些数据进行详细的财务分析。
+维度穿透分析数据:
+{{dimension_analysis_data}}
+
+行业特色指标 & 均值:
+{{industry_indicators}}
+
+预算数据:
+{{budget_data}}
 """
 
     # 配置
