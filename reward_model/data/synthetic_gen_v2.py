@@ -813,6 +813,16 @@ if __name__ == "__main__":
             api_key=os.getenv("QWEN_KEY"),
         ),
         ModelConfig(
+            model="Moonshot-Kimi-K2-Instruct",
+            base_url=os.getenv("QWEN_URL"),
+            api_key=os.getenv("QWEN_KEY"),
+        ),
+        ModelConfig(
+            model="glm-4.6",
+            base_url=os.getenv("QWEN_URL"),
+            api_key=os.getenv("QWEN_KEY"),
+        ),
+        ModelConfig(
             model="qwen3-max",
             base_url=os.getenv("QWEN_URL"),
             api_key=os.getenv("QWEN_KEY"),
@@ -830,7 +840,7 @@ if __name__ == "__main__":
         framework_dir=framework_dir,
         system_prompt_dir=system_prompt_dir,
         sample_data=SAMPLE_DATA,
-        n_pairs_per_field=3,  # 每个行业生成10个对比对
+        n_pairs_per_field=2,  # 每个行业生成10个对比对
         output_dir=output_dir,
         data_sample_dir=data_sample_dir,  # 传入数据样例目录
         use_parallel=True,  # 启用并发
