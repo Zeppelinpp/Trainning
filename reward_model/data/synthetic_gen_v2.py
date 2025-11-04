@@ -279,7 +279,7 @@ def _generate_single_pair(args):
             api_key=model_config["api_key"], base_url=model_config["base_url"]
         )
         model = model_config["model"]
-        
+
         # 按行业加载数据（只加载当前行业的数据）
         if data_sample_dir and os.path.exists(data_sample_dir):
             data_dict = load_sample_data(data_sample_dir, field=field)
@@ -370,55 +370,55 @@ def extract_industry_indicators(content: str, field: str) -> str:
         "房地产": "四、房地产",
         "科技业": "五、科技业",
     }
-    
+
     target_section = industry_mapping.get(field)
     if not target_section:
         return ""
-    
-    lines = content.split('\n')
+
+    lines = content.split("\n")
     start_idx = None
     end_idx = None
-    
+
     # 查找目标行业的起始位置（匹配 "## 一、制造业行业指标" 这样的格式）
     for i, line in enumerate(lines):
-        if target_section in line and line.startswith('##'):
+        if target_section in line and line.startswith("##"):
             start_idx = i
             break
-    
+
     if start_idx is None:
         return ""
-    
+
     # 查找下一个行业的起始位置（查找下一个以 "##" 开头且包含 "行业指标" 的行）
     for i in range(start_idx + 1, len(lines)):
-        if lines[i].startswith('##') and '行业指标' in lines[i]:
+        if lines[i].startswith("##") and "行业指标" in lines[i]:
             # 确保不是当前行业
             if target_section not in lines[i]:
                 end_idx = i
                 break
-    
+
     # 如果没有找到下一个行业章节，查找其他主要章节（"## 六" 或 "## 七"）
     if end_idx is None:
         for i in range(start_idx + 1, len(lines)):
-            if lines[i].startswith('## 六') or lines[i].startswith('## 七'):
+            if lines[i].startswith("## 六") or lines[i].startswith("## 七"):
                 end_idx = i
                 break
-    
+
     # 如果还是没找到，提取到文件结尾
     if end_idx is None:
         end_idx = len(lines)
-    
+
     # 提取行业数据
-    industry_data = '\n'.join(lines[start_idx:end_idx])
-    
+    industry_data = "\n".join(lines[start_idx:end_idx])
+
     # 添加头部说明
     header = f"# {field}行业特色指标 & 均值数据\n\n**数据期间**: 2025年3月\n\n---\n\n"
-    
+
     return header + industry_data
 
 
 def load_sample_data(data_sample_dir: str, field: str = None) -> Dict[str, str]:
     """加载样例数据文件
-    
+
     Args:
         data_sample_dir: 数据文件目录
         field: 行业名称，如果提供则只加载该行业的指标数据
@@ -429,14 +429,14 @@ def load_sample_data(data_sample_dir: str, field: str = None) -> Dict[str, str]:
         "industry_indicators": "industry_indicators.md",
         "budget_data": "budget_data.md",
     }
-    
+
     loaded_data = {}
     for key, filename in data_files.items():
         file_path = os.path.join(data_sample_dir, filename)
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
-                
+
             # 如果是行业指标且提供了行业参数，则提取特定行业的数据
             if key == "industry_indicators" and field:
                 loaded_data[key] = extract_industry_indicators(content, field)
@@ -445,7 +445,7 @@ def load_sample_data(data_sample_dir: str, field: str = None) -> Dict[str, str]:
         else:
             print(f"警告: 数据文件 {file_path} 不存在，将使用空字符串")
             loaded_data[key] = ""
-    
+
     return loaded_data
 
 
@@ -496,7 +496,7 @@ def generate_comparison_dataset(
 
     print(f"已加载 {len(frameworks)} 个分析框架")
     print(f"已加载 {len(system_prompts)} 个系统提示词")
-    
+
     # 注意：这里不再统一加载数据，而是在每个任务中按行业加载
 
     total_pairs = len(fields) * n_pairs_per_field
@@ -681,7 +681,7 @@ def _score_single_pair(args):
         judge_prompt = base_template.format(
             user_prompt=user_prompt,
             chosen_report=chosen_report,
-            rejected_report=rejected_report
+            rejected_report=rejected_report,
         )
 
         response = judge_client.chat.completions.create(
@@ -782,6 +782,7 @@ def add_multidim_scores(
             f.write(json.dumps(pair, ensure_ascii=False) + "\n")
 
     print(f"\n完成打分，保存至 {output_file}")
+
 
 if __name__ == "__main__":
     # Sample data description (you can replace with actual data)
