@@ -60,8 +60,9 @@ def split_dataset(input_file: str, output_dir: str, train_ratio: float = 0.7, va
     print(f"  - test.jsonl: {len(test_data)} samples")
 
 if __name__ == "__main__":
-    input_file = "/Users/ruipu/projects/Train/reward_model/data/dataset/comparison_pairs_scored.jsonl"
-    output_dir = "/Users/ruipu/projects/Train/reward_model/data"
+    script_dir = Path(__file__).parent
+    input_file = script_dir / "comparison_pairs_scored.jsonl"
+    output_dir = script_dir
     
-    split_dataset(input_file, output_dir, train_ratio=0.7, val_ratio=0.2, test_ratio=0.1)
+    split_dataset(str(input_file), str(output_dir), train_ratio=0.7, val_ratio=0.2, test_ratio=0.1)
 
