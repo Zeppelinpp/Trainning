@@ -24,21 +24,11 @@ class ModelConfig(BaseModel):
     api_key: str
 
 
-class ScoresDimension(BaseModel):
-    """单个响应的三维度评分（10档评分制）"""
-
-    depth: int  # 0-9分
-    professionalism: int  # 0-9分
-    accuracy: int  # 0-9分
-
-
 class ScoresData(BaseModel):
-    """完整的评分数据"""
+    """完整的评分数据（基于财务分析报告质量评估标准 - 离散分档制）"""
 
-    chosen: ScoresDimension
-    rejected: ScoresDimension
-    reasoning: Dict[str, str]  # 每个维度的对比理由
-    overall_assessment: str
+    chosen_score: int  # 0-5分：0=红线未达标, 1=基本结构, 2=问题识别, 3=归因分析, 4=管理建议, 5=完美报告
+    rejected_score: int  # 0-5分：0=红线未达标, 1=基本结构, 2=问题识别, 3=归因分析, 4=管理建议, 5=完美报告
 
 
 class ComparisonPair(BaseModel):
@@ -585,100 +575,99 @@ def _score_single_pair(args):
         )
         # Create judge prompt for multi-dimensional scoring
         # 基础模板（不含动态内容）
-        base_template = """你是一位严格且资深的财务分析专家，负责客观评估财务分析报告的质量。请严格、公正地评分，确保能清晰区分报告质量的差异。
+        base_template = """你是一位严格且资深的财务分析专家，负责客观评估财务分析报告的质量。请严格、公正地评分，使用离散分档制。
 
-请对以下两份报告在三个核心维度上进行严格评分。每个维度使用0-9分的10档评分制：
+**离散分档评分标准**：
 
-**评分标准**：
-- **9分（卓越）**：该维度表现完美，远超高质量标准
-- **8分（优秀+）**：该维度表现优秀，完全符合高质量标准
-- **7分（优秀）**：该维度表现很好，基本符合高质量标准
-- **6分（良好+）**：该维度表现良好，有小的提升空间
-- **5分（良好）**：该维度表现中上，符合基本标准
-- **4分（中等+）**：该维度表现一般偏上，有明显不足
-- **3分（中等）**：该维度表现一般，存在较多不足
-- **2分（较差）**：该维度表现较差，有严重问题
-- **1分（很差）**：该维度表现很差，基本不可用
-- **0分（极差）**：该维度完全不合格，毫无价值
+**0分（不合格）**：红线项未达标
+- 结构完整性有严重缺陷（缺少核心章节、框架混乱、关键指标遗漏）
+- 数据准确性有严重问题（数据不一致、计算错误、数据无法追溯）
+- 只要红线项（结构完整性或数据准确性）任一项不合格，直接判0分
 
-**评分维度定义（请严格对照）**：
+**1分（基本结构）**：通过红线项检查
+- ✓ 结构完整性达标：包含"经营业绩速览→本期亮点→问题识别→问题归因→管理建议"的基本框架
+- ✓ 数据准确性达标：财务数据基本一致，主要计算正确，能区分本月数和累计数
+- ✓ 指标覆盖度达标：包含核心财务指标（收入、利润、毛利率等）
+- ✓ 趋势分析达标：本月数据包含最近12个月趋势，累计数据包含5-10年趋势
 
-1. **分析深度 (depth)** [0-9分]
-   - 9分：多层次深度归因，完整的业务逻辑链，根本原因识别精准，前瞻性洞察深刻，指标关联分析完整
-   - 8分：深层次归因分析，深入业务层面，识别根本原因，有前瞻性洞察，能建立指标间逻辑关联
-   - 7分：较好的归因分析，能深入业务层面，识别主要原因，部分前瞻性洞察
-   - 6分：有归因分析，能识别部分原因，分析有一定深度但不够系统
-   - 5分：有一定的原因分析，能识别部分关联关系，但缺乏深层次洞察
-   - 4分：简单的原因分析，较为表面，缺乏系统性归因
-   - 3分：基本的现象描述为主，分析较为表面，缺乏归因分析
-   - 2分：主要是数据罗列，极少分析，仅有简单描述
-   - 1分：仅罗列数据，几乎没有分析
-   - 0分：完全没有分析，纯数据堆砌
+**2分（问题识别）**：达到1分 + 问题识别质量达标
+- ✓ 以上1分所有要求
+- ✓ 问题具体化：识别出3-5个关键经营问题，描述具体可衡量（如"华南区销售额环比下降10%"）
+- ✓ 避免模糊表述：不使用"业绩下滑""效率低"等模糊词汇
+- ✓ 风险关联性：每个问题关联潜在风险说明
 
-2. **专业度 (professionalism)** [0-9分]
-   - 9分：深刻理解行业本质，专业术语使用精准到位，多维度标杆对比，体现顶级行业洞察
-   - 8分：深入理解行业特征，准确使用专业术语，有行业标杆对比，体现深刻行业洞察
-   - 7分：很好地理解行业特点，专业术语使用准确，有部分标杆对比
-   - 6分：理解行业基本特征，专业术语使用较准确，有行业针对性
-   - 5分：了解行业基本特点，术语使用基本准确，但行业特色不够突出
-   - 4分：部分体现行业特点，术语使用一般，行业针对性较弱
-   - 3分：主要是通用财务分析，缺乏明显行业针对性，使用通用术语
-   - 2分：术语使用不当，专业性较差，几乎看不出行业特征
-   - 1分：缺乏基本专业性，术语错误较多
-   - 0分：完全外行，错误百出，毫无专业性
+**3分（归因分析）**：达到2分 + 归因分析深度达标
+- ✓ 以上2分所有要求
+- ✓ 整体业绩归因完整：明确净利润变动，量化收入与毛利端、期间费用、营业外收支与所得税的影响
+- ✓ 归因总结表：包含驱动因素、贡献额、贡献度、关键发现，数据准确
+- ✓ 分维度归因：按产品线、客户、销售部门、项目、地区等维度穿透分析
+- ✓ 逻辑连贯：问题识别基于数据，归因对应问题
 
-3. **数值计算准确性 (accuracy)** [0-9分]
-   - 9分：所有计算完美精确，特殊情况处理完美，数据完全可追溯，格式非常规范
-   - 8分：所有计算精确无误，正确处理特殊情况（负值、零值等），数据可追溯，格式规范
-   - 7分：主要计算精确，特殊情况处理正确，数据基本可追溯
-   - 6分：大部分计算正确，有极个别小误差，基本符合规范
-   - 5分：主要计算正确，个别小误差，基本符合规范
-   - 4分：部分计算正确，存在一些误差，影响较小
-   - 3分：存在明显计算错误或精度问题，影响部分结论
-   - 2分：较多计算错误，明显影响结论的可信度
-   - 1分：多处严重计算错误，严重影响结论
-   - 0分：计算完全错误或缺失，数据完全不可信
+**4分（管理建议）**：达到3分 + 管理建议质量达标
+- ✓ 以上3分所有要求
+- ✓ 建议针对性：每条建议对应具体问题和归因结论
+- ✓ 可操作性：建议具体可落地，有明确的执行方向
+- ✓ 量化预期：可量化建议预测改进带来的影响（如"降低采购成本2%将提升毛利率0.5个百分点"）
+
+**5分（完美报告）**：达到4分 + 报告呈现卓越
+- ✓ 以上4分所有要求
+- ✓ 可视化规范：恰当使用表格、图表，关键数据突出显示
+- ✓ 专业表述：术语使用精准，表述清晰专业
+- ✓ 格式完美：标题、期间与分析周期一致，整体呈现无可挑剔
+
+**评分流程（逐级检查，不达标则停止）**：
+1. **第一步：检查红线项**
+   - 结构完整性：是否包含所有必需章节和指标？框架是否清晰？
+   - 数据准确性：数据是否一致？计算是否正确？
+   - **不通过 → 0分，停止评分**
+   - **通过 → 继续**
+
+2. **第二步：检查问题识别**（50分线）
+   - 是否识别3-5个具体问题？描述是否可衡量？是否避免模糊表述？是否有风险关联？
+   - **不通过 → 1分，停止评分**
+   - **通过 → 继续**
+
+3. **第三步：检查归因分析**（70分线）
+   - 整体业绩归因是否完整？是否有归因总结表？是否有分维度归因？逻辑是否连贯？
+   - **不通过 → 2分，停止评分**
+   - **通过 → 继续**
+
+4. **第四步：检查管理建议**（90分线）
+   - 建议是否有针对性？是否可操作？是否有量化预期？
+   - **不通过 → 3分，停止评分**
+   - **通过 → 继续**
+
+5. **第五步：检查报告呈现**（100分线）
+   - 可视化是否规范？表述是否专业？格式是否完美？
+   - **不完美 → 4分**
+   - **完美 → 5分**
 
 **评分原则**：
-1. **严格区分**：充分利用10档评分，两份报告必须在三个维度上都有明显差异（理想情况下总分差异应≥6分）
-2. **客观公正**：完全基于报告实际内容评分，不受"黄金"或"缺陷"标签影响
-3. **细粒度评估**：仔细对比细节差异，使用完整的0-9分区间，不要集中在某几个分数上
-4. **差异放大**：如果发现两份报告差异不明显，请更严格地扣rejected的分，确保能区分质量差异
+1. **严格逐级检查**：必须按顺序检查，当前级别不通过就停止，不能跳级
+2. **客观公正**：完全基于报告实际内容评分，不受"报告A"或"报告B"标签影响
+3. **红线零容忍**：红线项有任何严重问题直接0分
+4. **质量差异明显**：两份报告通常应有明显的分数差异
 
 **用户需求**：
 {user_prompt}
 
-**报告A（黄金响应）**：
+**报告A**：
 {chosen_report}
 
-**报告B（缺陷响应）**：
+**报告B**：
 {rejected_report}
 
-请以JSON格式输出评分结果：
+请按照以上5步评分流程，严格逐级检查每份报告，以JSON格式输出评分结果：
 {{
-    "chosen_scores": {{
-        "depth": <0-9的整数>,
-        "professionalism": <0-9的整数>,
-        "accuracy": <0-9的整数>
-    }},
-    "rejected_scores": {{
-        "depth": <0-9的整数>,
-        "professionalism": <0-9的整数>,
-        "accuracy": <0-9的整数>
-    }},
-    "reasoning": {{
-        "depth": "<详细对比两份报告在分析深度上的具体差异，解释为什么chosen得X分、rejected得Y分>",
-        "professionalism": "<详细对比两份报告在专业度上的具体差异，解释为什么chosen得X分、rejected得Y分>",
-        "accuracy": "<详细对比两份报告在数值准确性上的具体差异，解释为什么chosen得X分、rejected得Y分>"
-    }},
-    "overall_assessment": "<总体评价，明确说明哪份报告更优，总分差异是多少，以及主要原因>"
+    "chosen_score": <0-5的整数>,
+    "rejected_score": <0-5的整数>
 }}
 
 **重要提醒**：
-1. 分数必须是0-9之间的整数
-2. 确保两份报告在各维度上有明显差异（总分差异通常应≥6分）
-3. 充分利用10档评分的细粒度，不要只用几个固定分数
-4. 详细说明评分的具体依据，解释每个分数的理由
+1. 分数必须是0-5之间的整数（离散分档）
+2. 必须按照评分流程逐级检查，不通过就停止
+3. 红线项不合格必须给0分
+4. 严格按照每个分数档位的所有要求进行判断
 """
 
         
@@ -701,20 +690,22 @@ def _score_single_pair(args):
 
         score_result = json.loads(response.choices[0].message.content)
 
-        # Validate scores are in 0-9 range (10档评分制)
-        for report_type in ["chosen_scores", "rejected_scores"]:
-            for dim in ["depth", "professionalism", "accuracy"]:
-                score = score_result[report_type][dim]
-                if not isinstance(score, int) or not (0 <= score <= 9):
-                    print(f"\n警告: {report_type}.{dim} 分数异常: {score}，使用默认值5")
-                    score_result[report_type][dim] = 5
+        # Validate scores are in 0-5 range (离散分档制)
+        chosen_score = score_result.get("chosen_score", 1)
+        rejected_score = score_result.get("rejected_score", 1)
+        
+        if not isinstance(chosen_score, int) or not (0 <= chosen_score <= 5):
+            print(f"\n警告: chosen_score 分数异常: {chosen_score}，使用默认值1")
+            chosen_score = 1
+        
+        if not isinstance(rejected_score, int) or not (0 <= rejected_score <= 5):
+            print(f"\n警告: rejected_score 分数异常: {rejected_score}，使用默认值1")
+            rejected_score = 1
 
-        # 构建符合ScoresData模型的数据结构
+        # 构建简化的分数数据结构
         scores_data = {
-            "chosen": score_result["chosen_scores"],
-            "rejected": score_result["rejected_scores"],
-            "reasoning": score_result["reasoning"],
-            "overall_assessment": score_result.get("overall_assessment", ""),
+            "chosen_score": chosen_score,
+            "rejected_score": rejected_score,
         }
 
         # Add scores to pair
@@ -736,17 +727,19 @@ def add_multidim_scores(
     max_workers: int = None,
 ):
     """
-    使用AI裁判为报告打多维度分数（10档评分制：0-9分）
+    使用AI裁判为财务分析报告打质量分数（离散分档制：0-5分）
 
-    三个核心维度：
-    1. 分析深度 (depth): 0-9分
-    2. 专业度 (professionalism): 0-9分
-    3. 数值计算准确性 (accuracy): 0-9分
+    离散分档标准（逐级检查）：
+    - 0分：红线项未达标（结构完整性或数据准确性有严重问题）
+    - 1分：通过红线项检查（基本结构）
+    - 2分：达到1分 + 问题识别质量达标（50分线）
+    - 3分：达到2分 + 归因分析深度达标（70分线）
+    - 4分：达到3分 + 管理建议质量达标（90分线）
+    - 5分：达到4分 + 报告呈现卓越（100分线）
 
-    评分标准（10档）：
-    - 9分：卓越 - 8分：优秀+ - 7分：优秀
-    - 6分：良好+ - 5分：良好 - 4分：中等+
-    - 3分：中等 - 2分：较差 - 1分：很差 - 0分：极差
+    评分原则：
+    - 严格逐级检查，当前级别不通过则停止评分
+    - 红线项零容忍，任一红线项不合格直接0分
     """
     pairs = []
     with open(input_file, "r", encoding="utf-8") as f:
@@ -769,7 +762,7 @@ def add_multidim_scores(
         print(f"使用 {workers} 个并发进程进行打分（已限制并发数避免速率限制）...")
 
         with Pool(processes=workers) as pool:
-            with tqdm(total=len(pairs), desc="AI裁判多维度打分") as pbar:
+            with tqdm(total=len(pairs), desc="AI裁判质量打分") as pbar:
                 for result in pool.imap_unordered(_score_single_pair, tasks):
                     if "score_error" in result:
                         print(f"\n打分时出错: {result['score_error']}")
@@ -778,7 +771,7 @@ def add_multidim_scores(
     else:
         # 串行执行（用于调试）
         print("串行模式进行打分...")
-        with tqdm(total=len(pairs), desc="AI裁判多维度打分") as pbar:
+        with tqdm(total=len(pairs), desc="AI裁判质量打分") as pbar:
             for task in tasks:
                 result = _score_single_pair(task)
                 scored_pairs.append(result)
@@ -794,77 +787,88 @@ def add_multidim_scores(
 
 if __name__ == "__main__":
     # Sample data description (you can replace with actual data)
-    SAMPLE_DATA = """
-    利润分析数据:
-    {{profit_analysis_data}}
+    # SAMPLE_DATA = """
+    # 利润分析数据:
+    # {{profit_analysis_data}}
 
-    维度穿透分析数据:
-    {{dimension_analysis_data}}
+    # 维度穿透分析数据:
+    # {{dimension_analysis_data}}
 
-    行业特色指标 & 均值:
-    {{industry_indicators}}
+    # 行业特色指标 & 均值:
+    # {{industry_indicators}}
 
-    预算数据:
-    {{budget_data}}
-    """
-    # 配置
-    fields = ["制造业", "服务业", "金融业", "房地产", "科技业"]
-    framework_dir = "./reward_model/data/analysis_framework/"
-    system_prompt_dir = "./reward_model/data/system_prompt/"
-    output_dir = "./reward_model/data/dataset/"
-    data_sample_dir = "./reward_model/data/data_sample/"
+    # 预算数据:
+    # {{budget_data}}
+    # """
+    # # 配置
+    # fields = ["制造业", "服务业", "金融业", "房地产", "科技业"]
+    # framework_dir = "./reward_model/data/analysis_framework/"
+    # system_prompt_dir = "./reward_model/data/system_prompt/"
+    # output_dir = "./reward_model/data/dataset/"
+    # data_sample_dir = "./reward_model/data/data_sample/"
 
-    model_configs = [
-        ModelConfig(
-            model="qwen-long",
-            base_url=os.getenv("QWEN_URL"),
-            api_key=os.getenv("QWEN_KEY"),
-        ),
-        ModelConfig(
-            model="Moonshot-Kimi-K2-Instruct",
-            base_url=os.getenv("QWEN_URL"),
-            api_key=os.getenv("QWEN_KEY"),
-        ),
-        ModelConfig(
-            model="glm-4.6",
-            base_url=os.getenv("QWEN_URL"),
-            api_key=os.getenv("QWEN_KEY"),
-        ),
-        ModelConfig(
-            model="qwen3-max",
-            base_url=os.getenv("QWEN_URL"),
-            api_key=os.getenv("QWEN_KEY"),
-        ),
-    ]
+    # model_configs = [
+    #     ModelConfig(
+    #         model="qwen-long",
+    #         base_url=os.getenv("QWEN_URL"),
+    #         api_key=os.getenv("QWEN_KEY"),
+    #     ),
+    #     ModelConfig(
+    #         model="Moonshot-Kimi-K2-Instruct",
+    #         base_url=os.getenv("QWEN_URL"),
+    #         api_key=os.getenv("QWEN_KEY"),
+    #     ),
+    #     ModelConfig(
+    #         model="glm-4.6",
+    #         base_url=os.getenv("QWEN_URL"),
+    #         api_key=os.getenv("QWEN_KEY"),
+    #     ),
+    #     ModelConfig(
+    #         model="qwen3-max",
+    #         base_url=os.getenv("QWEN_URL"),
+    #         api_key=os.getenv("QWEN_KEY"),
+    #     ),
+    # ]
 
-    # Step 1: Generate comparison pairs
-    print("=" * 70)
-    print("第一步：生成对比对数据集")
-    print("=" * 70)
+    # # Step 1: Generate comparison pairs
+    # print("=" * 70)
+    # print("第一步：生成对比对数据集")
+    # print("=" * 70)
 
-    output_file = generate_comparison_dataset(
-        fields=fields,
-        model_configs=model_configs,
-        framework_dir=framework_dir,
-        system_prompt_dir=system_prompt_dir,
-        sample_data=SAMPLE_DATA,
-        n_pairs_per_field=2,  # 每个行业生成10个对比对
-        output_dir=output_dir,
-        data_sample_dir=data_sample_dir,  # 传入数据样例目录
-        use_parallel=True,  # 启用并发
-        max_workers=None,  # 自动选择worker数量
-    )
+    # output_file = generate_comparison_dataset(
+    #     fields=fields,
+    #     model_configs=model_configs,
+    #     framework_dir=framework_dir,
+    #     system_prompt_dir=system_prompt_dir,
+    #     sample_data=SAMPLE_DATA,
+    #     n_pairs_per_field=2,  # 每个行业生成10个对比对
+    #     output_dir=output_dir,
+    #     data_sample_dir=data_sample_dir,  # 传入数据样例目录
+    #     use_parallel=True,  # 启用并发
+    #     max_workers=None,  # 自动选择worker数量
+    # )
 
-    # Step 2: Add multi-dimensional scores
-    print("\n" + "=" * 70)
-    print("第二步：AI裁判多维度打分")
-    print("=" * 70)
+    # # Step 2: Add quality scores
+    # print("\n" + "=" * 70)
+    # print("第二步：AI裁判质量打分（离散分档制：0-5分）")
+    # print("=" * 70)
 
     judge_client = OpenAI(api_key=os.getenv("QWEN_KEY"), base_url=os.getenv("QWEN_URL"))
-
-    scored_output_file = os.path.join(output_dir, "comparison_pairs_scored.jsonl")
+    
+    # Sample 2 rows to test
+    output_file = "./reward_model/data/dataset/comparison_pairs.jsonl"
+    with open(output_file.replace(".jsonl", "_test.jsonl"), "w", encoding="utf-8") as f_out:
+        with open(output_file, "r", encoding="utf-8") as f_in:
+            line_count = 0
+            for line in f_in:
+                if line_count >= 2:
+                    break
+                f_out.write(line)
+                line_count += 1
+            
+    scored_output_file = os.path.join("./reward_model/data/dataset/", "comparison_pairs_scored.jsonl")
     add_multidim_scores(
-        input_file=output_file,
+        input_file=output_file.replace(".jsonl", "_test.jsonl"),
         output_file=scored_output_file,
         judge_client=judge_client,
         judge_model="qwen3-max",  # Use strongest model as judge
