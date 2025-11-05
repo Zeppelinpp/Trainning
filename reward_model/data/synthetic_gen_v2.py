@@ -3,6 +3,7 @@ import json
 import random
 import time
 from typing import List, Dict, Any, Optional
+import uuid
 from openai import OpenAI
 from dotenv import load_dotenv
 from tqdm import tqdm
@@ -304,10 +305,10 @@ def _generate_single_pair(args):
         )
 
         # Write to file
-        uuid = str(uuid.uuid4())
+        id = str(uuid.uuid4())
         # Ensure the directory exists before writing the file
-        os.makedirs("reward_model/data/data_sample", exist_ok=True)
-        with open(f"reward_model/data/data_sample/comparison_{uuid[:8]}.md", "w") as f:
+        os.makedirs("reward_model/data/data_sample/comparison_pairs", exist_ok=True)
+        with open(f"reward_model/data/data_sample/comparison_pairs/comparison_{id[:8]}.md", "w") as f:
             f.write(f"# Gold Response\n\n{gold_response}\n\n# Defect Response\n\n{defect_response}")
 
         # Create comparison pair
