@@ -303,6 +303,13 @@ def _generate_single_pair(args):
             client, model, gold_response, field
         )
 
+        # Write to file
+        uuid = str(uuid.uuid4())
+        # Ensure the directory exists before writing the file
+        os.makedirs("reward_model/data/data_sample", exist_ok=True)
+        with open(f"reward_model/data/data_sample/comparison_{uuid[:8]}.md", "w") as f:
+            f.write(f"# Gold Response\n\n{gold_response}\n\n# Defect Response\n\n{defect_response}")
+
         # Create comparison pair
         pair = ComparisonPair(
             prompt=complete_prompt,
